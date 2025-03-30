@@ -88,7 +88,7 @@ if __name__=='__main__':
     batch_size = 64
     lr_classifier = 1e-3
     lr_kae = 1e-3
-    num_epochs = 50
+    num_epochs = 60
     T = 6
     c1 = 1
     c2 = 1
@@ -108,7 +108,7 @@ if __name__=='__main__':
     # Build the KAE
     param_vec = parameters_to_vector(classifier.parameters()) 
     state_dim = param_vec.shape[0]
-    hidden_dim = 16
+    hidden_dim = 32
     kae = KoopmanAutoencoder(state_dim=state_dim, hidden_dim=hidden_dim).to(device)
     kae.train()
     criterion_kae = koopman_loss
@@ -136,15 +136,15 @@ if __name__=='__main__':
     for epoch in range(num_epochs):
         # current_params = parameters_to_vector(classifier.parameters())
         for images, labels in train_loader_classifier:
-            idx_sub = epoch % num_classes
-            trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
-            images_sub, labels_sub = next(iter(trainloader_sub))
-
+            loss_sub = 0.0
             loss_classifier = compute_l_classifier(classifier, images, labels)
             loss_kae, z = compute_l_kae(kae, params_snapshots)
-            N_O = z.shape[-1]
-            param_sub = compute_theta_sub(kae, z, idx_sub)
-            loss_sub = compute_l_sub(param_sub, images_sub, labels_sub)
+            for idx_sub in range(num_classes):
+                trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
+                images_sub, labels_sub = next(iter(trainloader_sub))
+                N_O = z.shape[-1]
+                param_sub = compute_theta_sub(kae, z, idx_sub)
+                loss_sub = loss_sub + compute_l_sub(param_sub, images_sub, labels_sub)
             loss = loss_classifier + loss_kae + loss_sub
 
             optimizer_kae.zero_grad()
@@ -155,14 +155,21 @@ if __name__=='__main__':
             params_snapshots.append(parameters_to_vector(classifier.parameters()))
             params_snapshots.pop(0)
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item()/len(train_loader_classifier):.4f}')
-
+    # Test the original classifier again
+    test_classifier(classifier, test_loader)
     # Save parameters and Koopman operator
     loss_kae, z = compute_l_kae(kae, params_snapshots)
     param_sub_all = compute_theta_sub_all(kae, z)
-    with open('data/submodels/params.pkl', 'wb') as f:
-        pickle.dump(param_sub_all, f)
-    _, z = compute_l_kae(kae, params_snapshots)
+    # with open('data/submodels/params.pkl', 'wb') as f:
+    #     pickle.dump(param_sub_all, f)
+    
+    torch.save({
+        'params_sub': param_sub_all,
+        'param_original': classifier.state_dict(),
+        'ko': kae.K
+    }, 'results/result.pth')
 
+    _, z = compute_l_kae(kae, params_snapshots)
     with torch.autograd.no_grad():
         for idx_sub in range(num_classes):
             # param_sub = compute_theta_sub(kae, z, idx_sub)
