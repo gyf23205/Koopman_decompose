@@ -12,10 +12,9 @@ import matplotlib.pyplot as plt
 # import dill
 
 def collect_latent_states(model, param_traj): # collect lifted (=latent) states 
-    with torch.no_grad():
-        z = model.encoder(param_traj)
-        latents = z[:-1, :]  # States at time t
-        latents_next = z[1:, :]  # States at time t+1
+    z = model.encoder(param_traj)
+    latents = z[:-1, :]  # States at time t
+    latents_next = z[1:, :]  # States at time t+1
     
     # latent_X = torch.cat(latent_X_list, dim=0)
     # latent_Y = torch.cat(latent_Y_list, dim=0)

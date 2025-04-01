@@ -1,11 +1,5 @@
-import numpy as np
-from scipy.linalg import eig
+import torch
 
-A_dense = np.random.rand(100, 100)
-
-# Compute both left and right eigenvectors simultaneously
-eigvals, eigvecs_left, eigvecs_right = eig(A_dense, left=True, right=True)
-
-print("Eigenvalues shape:", eigvals.shape)
-print("Left eigenvectors shape:", eigvecs_left.shape)
-print("Right eigenvectors shape:", eigvecs_right.shape)
+a = torch.tensor([1+2j, 2+3j])
+b = torch.tensor(a, dtype=torch.float32)
+print(b)

@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import pickle
@@ -11,6 +12,18 @@ from Autoencoder_real import KoopmanAutoencoder
 from Autoencoder_functions import koopman_loss, collect_latent_states
 from torch.nn.utils import parameters_to_vector
 from scipy.linalg import eig, inv
+from torch.utils.tensorboard import SummaryWriter
+
+
+def compute_gradient_norm(model, norm_type=2):
+    with torch.no_grad():
+        total_norm = 0.0
+        for param in model.parameters():
+            if param.grad is not None:
+                param_norm = param.grad.norm(norm_type)
+                total_norm += param_norm.item() ** norm_type
+        total_norm = total_norm ** (1.0 / norm_type)
+    return total_norm
 
 def compute_l_classifier(model, images, labels):
     # Move tensors to device
@@ -32,23 +45,28 @@ def compute_l_kae(kae, params_snapshots):
     return loss_kae, z
 
 def compute_theta_sub(kae, z, idx_sub):
-    ko = kae.K.detach().cpu().numpy()
-    eigval, eigvec_left = eig(ko, left=True, right=False)
+    ko = kae.K
+    eigval, eigvec_left = torch.linalg.eig(ko)
+    eigvec_left = eigvec_left.real
+    for e in range(hidden_dim):
+        writer.add_scalar(f'Eigval/{e}', eigval[e].abs(), epoch)
+    # print(eigval)
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
-    eigvec_left_inv = torch.tensor(inv(eigvec_left), dtype=torch.float32, device=device)
+    eigvec_left_inv = torch.linalg.inv(eigvec_left)
     v = (kae.decode(eigvec_left_inv)).T[:, idx_sub]
-    phi_i = torch.tensor(eigvec_left[idx_sub, :], dtype=torch.float32, device=device) @ z[-1, :]
+    phi_i = eigvec_left[idx_sub, :] @ z[-1, :]
     param_sub = phi_i * v
-    return param_sub
+    return param_sub, eigval
 
 def compute_theta_sub_all(kae, z):
-    ko = kae.K.detach().cpu().numpy()
-    eigval, eigvec_left = eig(ko, left=True, right=False)
+    ko = kae.K
+    eigval, eigvec_left = torch.linalg.eig(ko)
+    eigvec_left = eigvec_left.real
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
-    eigvec_left_inv = torch.tensor(inv(eigvec_left), dtype=torch.float32, device=device)
-    v = (kae.decode(eigvec_left_inv)).T[:, :num_classes]
-    phi = torch.tensor(eigvec_left, dtype=torch.float32, device=device) @ z[-1, :]
-    param_sub_all = v @ torch.diag(phi[:num_classes])
+    eigvec_left_inv = torch.linalg.inv(eigvec_left)
+    v = (kae.decode(eigvec_left_inv)).T
+    phi = eigvec_left @ z[-1, :]
+    param_sub_all = v @ torch.diag(phi)
     return param_sub_all
 
 def compute_l_sub(param_sub, images, labels):
@@ -82,14 +100,24 @@ def test_classifier(model, test_loader):
 
 if __name__=='__main__':
     # Hyperparameters
+    # Set training to be deterministic
+    seed = 5
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    writer = SummaryWriter(log_dir='results/log')
+
+
     image_size = 784  # 28x28 images flattened
     hidden_sizes = 8
     num_classes = 10
     batch_size = 64
     lr_classifier = 1e-3
     lr_kae = 1e-3
-    num_epochs = 60
-    T = 6
+    num_epochs = 10
+    T = 3
     c1 = 1
     c2 = 1
     c3 = 1
@@ -108,10 +136,11 @@ if __name__=='__main__':
     # Build the KAE
     param_vec = parameters_to_vector(classifier.parameters()) 
     state_dim = param_vec.shape[0]
-    hidden_dim = 32
+    hidden_dim = 16
     kae = KoopmanAutoencoder(state_dim=state_dim, hidden_dim=hidden_dim).to(device)
     kae.train()
     criterion_kae = koopman_loss
+    mse = torch.nn.MSELoss()
     optimizer_kae = optim.Adam(kae.parameters(), lr=lr_kae)
     
     # Get T number of snapshots first
@@ -133,7 +162,10 @@ if __name__=='__main__':
     
     n_params = len(params_snapshots[0])
     print(n_params)
+    classifier.train()
+    kae.train()
     for epoch in range(num_epochs):
+        running_loss = 0.0
         # current_params = parameters_to_vector(classifier.parameters())
         for images, labels in train_loader_classifier:
             loss_sub = 0.0
@@ -143,9 +175,16 @@ if __name__=='__main__':
                 trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
                 images_sub, labels_sub = next(iter(trainloader_sub))
                 N_O = z.shape[-1]
-                param_sub = compute_theta_sub(kae, z, idx_sub)
+                param_sub, eigvals = compute_theta_sub(kae, z, idx_sub)
                 loss_sub = loss_sub + compute_l_sub(param_sub, images_sub, labels_sub)
-            loss = loss_classifier + loss_kae + loss_sub
+            loss_eig = mse(torch.abs(eigvals[:num_classes]), torch.ones(num_classes, device=device))
+            # loss = loss_classifier + loss_kae + loss_sub + loss_eig
+            loss = loss_eig
+            writer.add_scalar('Loss/classification', loss_classifier.item(), epoch)
+            writer.add_scalar('Loss/eig', loss_eig.item(), epoch)
+            writer.add_scalar('Loss/kae', loss_kae.item(), epoch)
+            writer.add_scalar('Loss/sub', loss_sub.item(), epoch)
+            writer.add_scalar('Loss/all', loss.item(), epoch)
 
             optimizer_kae.zero_grad()
             optimizer_classifier.zero_grad()
@@ -154,12 +193,16 @@ if __name__=='__main__':
             optimizer_classifier.step()
             params_snapshots.append(parameters_to_vector(classifier.parameters()))
             params_snapshots.pop(0)
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item()/len(train_loader_classifier):.4f}')
+            running_loss += loss.item()
+            # print(compute_gradient_norm(classifier))
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader_classifier):.4f}')
     # Test the original classifier again
     test_classifier(classifier, test_loader)
+
     # Save parameters and Koopman operator
-    loss_kae, z = compute_l_kae(kae, params_snapshots)
-    param_sub_all = compute_theta_sub_all(kae, z)
+    with torch.autograd.no_grad():
+        loss_kae, z = compute_l_kae(kae, params_snapshots)
+        param_sub_all = compute_theta_sub_all(kae, z)
     # with open('data/submodels/params.pkl', 'wb') as f:
     #     pickle.dump(param_sub_all, f)
     
@@ -191,3 +234,4 @@ if __name__=='__main__':
             print(f'Test Accuracy of class {idx_sub:d}: {accuracy:.2f}%')
     # with open('.data/snapshots/params_snapshots.pkl', 'wb') as f:
     #     pickle.dump(params_snapshots, f)
+    writer.flush()
