@@ -55,12 +55,12 @@ class KoopmanAutoencoder(nn.Module):
         X_pseudo_inv = torch.linalg.pinv(latent_X)  # Compute pseudo-inverse of latent_X
         self.K = torch.matmul(latent_Y.T, X_pseudo_inv.T)  # K = Y * X^+
 
-    def encode(self, x):
-        with torch.no_grad():
-            z = self.encoder(x)  
-        return z
+    # def encode(self, x):
+    #     with torch.no_grad():
+    #         z = self.encoder(x)  
+    #     return z
 
-    def decode(self, x):
-        with torch.no_grad():
-            z = self.decoder(x)  
-        return z
+    # def decode(self, x):
+    #     with torch.no_grad():
+    #         z = self.decoder(x)  
+        # return z

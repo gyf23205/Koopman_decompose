@@ -53,7 +53,7 @@ def compute_theta_sub(kae, z, idx_sub):
     # print(eigval)
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
     eigvec_left_inv = torch.linalg.inv(eigvec_left)
-    v = (kae.decode(eigvec_left_inv)).T[:, idx_sub]
+    v = (kae.decoder(eigvec_left_inv)).T[:, idx_sub]
     phi_i = eigvec_left[idx_sub, :] @ z[-1, :]
     param_sub = phi_i * v
     return param_sub, eigval
