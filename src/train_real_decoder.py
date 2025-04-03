@@ -52,7 +52,7 @@ def compute_theta_sub(kae, z, idx_sub):
         writer.add_scalar(f'Eigval/{e}', eigval[e].abs(), epoch)
     # print(eigval)
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
-    eigvec_left_inv = torch.linalg.inv(eigvec_left)
+    eigvec_left_inv = torch.linalg.pinv(eigvec_left)
     v = (kae.decoder(eigvec_left_inv)).T[:, idx_sub]
     phi_i = eigvec_left[idx_sub, :] @ z[-1, :]
     param_sub = phi_i * v
@@ -63,7 +63,7 @@ def compute_theta_sub_all(kae, z):
     eigval, eigvec_left = torch.linalg.eig(ko)
     eigvec_left = eigvec_left.real
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
-    eigvec_left_inv = torch.linalg.inv(eigvec_left)
+    eigvec_left_inv = torch.linalg.pinv(eigvec_left)
     v = (kae.decode(eigvec_left_inv)).T
     phi = eigvec_left @ z[-1, :]
     param_sub_all = v @ torch.diag(phi)
@@ -76,7 +76,15 @@ def compute_l_sub(param_sub, images, labels):
     images = images.reshape(-1, 28*28).to(device)
     labels = labels.to(device)
     outputs = classifier_sub(images)
-    loss = criterion_classifier(outputs, labels)
+    # loss = criterion_classifier(outputs, labels)
+    ####################
+    _, predicted = torch.max(outputs, 1)
+    total = 0
+    correct = 0
+    total += labels.size(0)
+    correct += (predicted == labels).sum().item()
+    loss = correct / total
+    ####################
     return loss
 
 def test_classifier(model, test_loader):
@@ -95,9 +103,6 @@ def test_classifier(model, test_loader):
         accuracy = 100 * correct / total
         print(f'Test Accuracy: {accuracy:.2f}%')
 
-
-    
-
 if __name__=='__main__':
     # Hyperparameters
     # Set training to be deterministic
@@ -114,15 +119,24 @@ if __name__=='__main__':
     hidden_sizes = 8
     num_classes = 10
     batch_size = 64
-    lr_classifier = 1e-3
-    lr_kae = 1e-3
+    lr_classifier = 1e-4
+    lr_kae = 1e-2
     num_epochs = 10
     T = 3
     c1 = 1
     c2 = 1
     c3 = 1
-    p = 20
+    p = 5
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    ####################
+    # maximum number of subclass that each mode will handle
+    n_m = 3
+    # Number of modes with major contribution
+    num_modes = 5
+    # # hyper param for smoothing
+    # temperature = 0.1
+    ####################
 
     # Load datasets
     mnist_per_class = MNISTPerClass(batch_size=batch_size)
@@ -171,15 +185,34 @@ if __name__=='__main__':
             loss_sub = 0.0
             loss_classifier = compute_l_classifier(classifier, images, labels)
             loss_kae, z = compute_l_kae(kae, params_snapshots)
-            for idx_sub in range(num_classes):
-                trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
-                images_sub, labels_sub = next(iter(trainloader_sub))
+            # for idx_sub in range(num_classes):
+            #     trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
+            #     images_sub, labels_sub = next(iter(trainloader_sub))
+            #     N_O = z.shape[-1]
+            #     param_sub, eigvals = compute_theta_sub(kae, z, idx_sub)
+            #     loss_sub = loss_sub + compute_l_sub(param_sub, images_sub, labels_sub)
+            ####################
+            for idx_mode in range(num_modes):
                 N_O = z.shape[-1]
-                param_sub, eigvals = compute_theta_sub(kae, z, idx_sub)
-                loss_sub = loss_sub + compute_l_sub(param_sub, images_sub, labels_sub)
-            loss_eig = mse(torch.abs(eigvals[:num_classes]), torch.ones(num_classes, device=device))
-            # loss = loss_classifier + loss_kae + loss_sub + loss_eig
-            loss = loss_eig
+                param_sub, eigvals = compute_theta_sub(kae, z, idx_mode)
+                # loss_sub_sub = 0.0
+                loss_sub_sub = np.zeros(num_classes)
+                for idx_sub in range(num_classes):
+                    trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
+                    images_sub, labels_sub = next(iter(trainloader_sub))
+                    # temp = compute_l_sub(param_sub, images_sub, labels_sub)
+                    # loss_sub_sub = loss_sub_sub + torch.sigmoid(torch.tensor((temp-n_m)/temperature))
+                    loss_sub_sub[idx_sub] = compute_l_sub(param_sub, images_sub, labels_sub)
+
+                lambda1 = 1.0
+                lambda2 = 0.1
+                loss_sub += lambda1 * (np.sum(loss_sub_sub) - n_m)**2 + lambda2 * np.sum(loss_sub_sub* (1 - loss_sub_sub))
+
+            loss_eig = mse(torch.abs(eigvals[:num_modes]), torch.ones(num_modes, device=device))
+            # loss = loss_classifier + loss_kae + loss_sub 
+            ####################
+            
+            loss = loss_classifier + loss_kae + loss_sub + loss_eig
             writer.add_scalar('Loss/classification', loss_classifier.item(), epoch)
             writer.add_scalar('Loss/eig', loss_eig.item(), epoch)
             writer.add_scalar('Loss/kae', loss_kae.item(), epoch)
@@ -196,6 +229,7 @@ if __name__=='__main__':
             running_loss += loss.item()
             # print(compute_gradient_norm(classifier))
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader_classifier):.4f}')
+        print(f'Class: {loss_classifier:.4f}, Sub: {loss_sub:.4f}, KAE: {loss_kae:.4f}')
     # Test the original classifier again
     test_classifier(classifier, test_loader)
 
@@ -235,3 +269,8 @@ if __name__=='__main__':
     # with open('.data/snapshots/params_snapshots.pkl', 'wb') as f:
     #     pickle.dump(params_snapshots, f)
     writer.flush()
+
+# [ ] 1. No eig, original sub
+# [ ] 2. Yes eig, original sub
+# [ ] 3. No eig, new sub
+# [on going] 4. Yes eig, new sub 
