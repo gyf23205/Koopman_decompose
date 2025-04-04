@@ -81,10 +81,10 @@ if __name__=='__main__':
     hidden_sizes = 8
     num_classes = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    with open('data/submodels/params.pkl', 'rb') as f:
-        param_sub_all = pickle.load(f)
-    # result = torch.load('results/result.pth')
-    # param_sub_all = result['params_sub']
+    # with open('data/submodels/params.pkl', 'rb') as f:
+    #     param_sub_all = pickle.load(f)
+    result = torch.load('results/result.pth')
+    param_sub_all = result['params_sub']
     classifier = MLP(image_size, hidden_sizes, num_classes).to(device)
     batch_size = 64
     mnist_per_class = MNISTPerClass(batch_size=batch_size)

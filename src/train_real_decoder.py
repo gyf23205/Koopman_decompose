@@ -1,8 +1,5 @@
 import os
 import torch
-import numpy as np
-import pickle
-import copy
 import torch.nn as nn
 import torch.optim as optim
 from classifier import MLP
@@ -44,33 +41,33 @@ def compute_l_kae(kae, params_snapshots):
     loss_kae = c1*recon_loss + c2*state_pred_loss + c3*koopman_pred_loss # + c4*k_norm_loss      
     return loss_kae, z
 
-def compute_theta_sub(kae, z, idx_sub):
-    ko = kae.K
-    eigval, eigvec_left = torch.linalg.eig(ko)
-    eigvec_left = eigvec_left.real
-    for e in range(hidden_dim):
-        writer.add_scalar(f'Eigval/{e}', eigval[e].abs(), epoch)
-    # print(eigval)
-    # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
-    eigvec_left_inv = torch.linalg.inv(eigvec_left)
-    v = (kae.decoder(eigvec_left_inv)).T[:, idx_sub]
-    phi_i = eigvec_left[idx_sub, :] @ z[-1, :]
-    param_sub = phi_i * v
-    return param_sub, eigval
+# def compute_theta_sub(kae, z, idx_sub):
+#     ko = kae.K
+#     eigval, eigvec_left = torch.linalg.eig(ko)
+#     eigvec_left = eigvec_left.real
+#     for e in range(hidden_dim):
+#         writer.add_scalar(f'Eigval/{e}', eigval[e].abs(), epoch)
+#     eigvec_left_inv = torch.linalg.inv(eigvec_left)
+#     v = (kae.decoder(eigvec_left_inv)).T[:, idx_sub]
+#     phi_i = eigvec_left[idx_sub, :] @ z[-1, :]
+#     param_sub = phi_i * v
+#     return param_sub, eigval
 
 def compute_theta_sub_all(kae, z):
     ko = kae.K
-    eigval, eigvec_left = torch.linalg.eig(ko)
+    eigvals, eigvec_left = torch.linalg.eig(ko)
     eigvec_left = eigvec_left.real
+    for e in range(hidden_dim):
+        writer.add_scalar(f'Eigval/{e}', torch.abs(eigvals[e]), epoch)
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
     eigvec_left_inv = torch.linalg.inv(eigvec_left)
-    v = (kae.decode(eigvec_left_inv)).T
+    v = (kae.decoder(eigvec_left_inv)).T
     phi = eigvec_left @ z[-1, :]
     param_sub_all = v @ torch.diag(phi)
-    return param_sub_all
+    return param_sub_all, eigvals
 
 def compute_l_sub(param_sub, images, labels):
-    classifier_sub = copy.deepcopy(classifier)
+    classifier_sub = MLP(image_size, hidden_sizes, num_classes).to(device)
     nn.utils.vector_to_parameters(param_sub, classifier_sub.parameters())
     
     images = images.reshape(-1, 28*28).to(device)
@@ -109,7 +106,7 @@ if __name__=='__main__':
     os.environ['PYTHONHASHSEED'] = str(seed)
     writer = SummaryWriter(log_dir='results/log')
 
-
+    save = True
     image_size = 784  # 28x28 images flattened
     hidden_sizes = 8
     num_classes = 10
@@ -169,17 +166,20 @@ if __name__=='__main__':
         # current_params = parameters_to_vector(classifier.parameters())
         for images, labels in train_loader_classifier:
             loss_sub = 0.0
+            loss_eig = 0.0
             loss_classifier = compute_l_classifier(classifier, images, labels)
-            loss_kae, z = compute_l_kae(kae, params_snapshots)
+            loss_kae, z = compute_l_kae(kae, params_snapshots) # Koopman operator is updated here.
+            N_O = z.shape[-1]
+            param_sub_all, eigvals = compute_theta_sub_all(kae, z)
             for idx_sub in range(num_classes):
                 trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
                 images_sub, labels_sub = next(iter(trainloader_sub))
-                N_O = z.shape[-1]
-                param_sub, eigvals = compute_theta_sub(kae, z, idx_sub)
-                loss_sub = loss_sub + compute_l_sub(param_sub, images_sub, labels_sub)
-            loss_eig = mse(torch.abs(eigvals[:num_classes]), torch.ones(num_classes, device=device))
-            # loss = loss_classifier + loss_kae + loss_sub + loss_eig
-            loss = loss_eig
+                loss_sub = loss_sub + compute_l_sub(param_sub_all[:, idx_sub], images_sub, labels_sub)
+                eig_target = torch.cat([torch.ones(num_classes, device=device),
+                                        torch.zeros(hidden_dim - num_classes, device=device)])
+                loss_eig = loss_eig + mse(torch.abs(eigvals), eig_target)
+
+            loss = loss_eig / num_classes + loss_classifier + loss_kae #  + loss_sub / num_classes
             writer.add_scalar('Loss/classification', loss_classifier.item(), epoch)
             writer.add_scalar('Loss/eig', loss_eig.item(), epoch)
             writer.add_scalar('Loss/kae', loss_kae.item(), epoch)
@@ -192,7 +192,7 @@ if __name__=='__main__':
             optimizer_kae.step()
             optimizer_classifier.step()
             params_snapshots.append(parameters_to_vector(classifier.parameters()))
-            params_snapshots.pop(0)
+            params_snapshots.pop(0) # Maybe don't pop?
             running_loss += loss.item()
             # print(compute_gradient_norm(classifier))
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {running_loss/len(train_loader_classifier):.4f}')
@@ -202,22 +202,22 @@ if __name__=='__main__':
     # Save parameters and Koopman operator
     with torch.autograd.no_grad():
         loss_kae, z = compute_l_kae(kae, params_snapshots)
-        param_sub_all = compute_theta_sub_all(kae, z)
+        param_sub_all, _ = compute_theta_sub_all(kae, z)
     # with open('data/submodels/params.pkl', 'wb') as f:
     #     pickle.dump(param_sub_all, f)
-    
-    torch.save({
-        'params_sub': param_sub_all,
-        'param_original': classifier.state_dict(),
-        'ko': kae.K
-    }, 'results/result.pth')
+    if save:
+        torch.save({
+            'params_sub': param_sub_all,
+            'param_original': classifier.state_dict(),
+            'ko': kae.K
+        }, 'results/result.pth')
 
     _, z = compute_l_kae(kae, params_snapshots)
     with torch.autograd.no_grad():
         for idx_sub in range(num_classes):
             # param_sub = compute_theta_sub(kae, z, idx_sub)
             param_sub = param_sub_all[:, idx_sub]
-            classifier_sub = copy.deepcopy(classifier)
+            classifier_sub = MLP(image_size, hidden_sizes, num_classes).to(device)
             classifier_sub.eval()
             nn.utils.vector_to_parameters(param_sub, classifier_sub.parameters())
             testloader = mnist_per_class.sub_testloaders[idx_sub]

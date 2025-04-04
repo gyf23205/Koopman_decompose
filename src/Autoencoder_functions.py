@@ -57,10 +57,10 @@ def koopman_loss(x, x_hat, z_pred, p, model): # compute loss functions
         # print(np.shape(predicted_latent))
 
         # State Prediction Loss
-        state_pred_loss += mse_loss(predicted_state, true_future_state[:predicted_state.size(0), :])
+        state_pred_loss = state_pred_loss + mse_loss(predicted_state, true_future_state[:predicted_state.size(0), :])
 
         # Latent Prediction Loss
-        latent_pred_loss += mse_loss(predicted_latent, true_future_latent[:predicted_latent.size(0), :])
+        latent_pred_loss = latent_pred_loss + mse_loss(predicted_latent, true_future_latent[:predicted_latent.size(0), :])
 
 
     # Average prediction losses over p time steps
