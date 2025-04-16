@@ -9,7 +9,6 @@ class MLP(nn.Module):
             nn.Linear(input_size, hidden_size),
             nn.ReLU(),
             # nn.Linear(hidden_sizes[0], hidden_sizes[1]),
-            nn.ReLU(),
             nn.Linear(hidden_size, num_classes)
         )
         
