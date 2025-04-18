@@ -1,4 +1,5 @@
 import os
+import math
 import torch
 import numpy as np
 import torch.nn as nn
@@ -69,7 +70,7 @@ def compute_theta_sub_all(kae, z):
     eigvals, eigvec_left = torch.linalg.eig(ko)
     eigvec_left = eigvec_left.real.detach()
     for e in range(hidden_k):
-        writer.add_scalar(f'Eigval/{e}', torch.abs(eigvals[e]), epoch * inner)
+        writer.add_scalar(f'Eigval/{e}', torch.abs(eigvals[e]), n_batch * epoch + inner)
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
     eigvec_left_inv = torch.linalg.inv(eigvec_left)
     v = (kae.decoder(eigvec_left_inv)).T
@@ -77,11 +78,14 @@ def compute_theta_sub_all(kae, z):
     param_sub_all = v @ torch.diag(phi)
     return param_sub_all, eigvals
 
-def compute_l_sub(param_sub, images, labels):
+def compute_l_sub(param_sub, target_classes, images, labels):
     # classifier_sub = MLP(image_size, hidden_c, num_classes).to(device)
     # nn.utils.vector_to_parameters(param_sub, classifier_sub.parameters())
     images = images.reshape(-1, 28*28).to(device)
     labels = labels.to(device)
+    mask = torch.isin(labels, target_classes.clone().detach())
+    images = images[mask]
+    labels = labels[mask]
     outputs = classifier_sub(images, param_sub)
     loss = criterion_classifier(outputs, labels)
     return loss
@@ -95,12 +99,29 @@ def test_classifier(model, test_loader):
             images = images.reshape(-1, 28*28).to(device)
             labels = labels.to(device)
             outputs = model(images)
-            _, predicted = torch.max(outputs, 1)
+            predicted = torch.argmax(outputs, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
         accuracy = 100 * correct / total
         print(f'Test Accuracy: {accuracy:.2f}%')
+
+def get_target_classes(param_sub, candidates, images, labels):
+    with torch.autograd.no_grad():
+        images = images.reshape(-1, 28*28).to(device)
+        labels = labels.to(device)
+        outputs = classifier_sub(images, param_sub)
+        _, pred = torch.max(outputs, 1)
+        acc = []
+        for i in candidates:
+            if i != -1:
+                mask = labels == i
+                acc.append((pred[mask] == labels[mask]).sum()/mask.sum())
+            else:
+                acc.append(-1)
+        _, top_idx = torch.topk(torch.tensor(acc), num_class_per_mode)
+        return candidates[top_idx]
+        
 
 
     
@@ -114,18 +135,20 @@ if __name__=='__main__':
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     os.environ['PYTHONHASHSEED'] = str(seed)
-    writer = SummaryWriter(log_dir='results/log_eig')
+    writer = SummaryWriter(log_dir='results/log_sub')
 
     save = True
     image_size = 784  # 28x28 images flattened
     hidden_c = 16
+    hidden_k = 4
     num_classes = 10
-    num_mode_dom = 2
-    batch_size = 64
+    num_mode_dom = 4
+    num_class_per_mode = int(math.ceil(num_classes/num_mode_dom))
+    batch_size = 128
     lr_classifier = 1e-3
     lr_kae = 1e-2
     num_epochs = 10
-    T = 15
+    T = 2
     c1 = 1
     c2 = 1
     c3 = 1
@@ -153,7 +176,7 @@ if __name__=='__main__':
     # Build the KAE
     param_vec = parameters_to_vector(classifier.parameters()) 
     state_dim = param_vec.shape[0]
-    hidden_k = 4
+    
     kae = KoopmanAutoencoder(state_dim=state_dim, hidden_dim=hidden_k).to(device)
     kae.train()
     criterion_kae = koopman_loss
@@ -185,33 +208,45 @@ if __name__=='__main__':
     print(n_params)
     classifier.train()
     kae.train()
+    n_batch = len(train_loader_classifier)
     for epoch in range(num_epochs):
         running_loss = 0.0
         # current_params = parameters_to_vector(classifier.parameters())
         for inner, (images, labels) in enumerate(train_loader_classifier):
-            # loss_sub = 0.0
+            loss_sub = 0.0
             # loss_eig = 0.0
             loss_classifier = compute_l_classifier(classifier, images, labels)
             loss_kae, z = compute_l_kae(kae, params_snapshots) # Koopman operator is updated here.
             N_O = z.shape[-1]
             param_sub_all, eigvals = compute_theta_sub_all(kae, z)
 
-            # for idx_sub in range(num_classes):
+            order = torch.argsort(eigvals.abs())
+            candidates = torch.linspace(0, 9, 10, dtype=int, device=device)
+            for _ in range(num_mode_dom):
+                best_mode = torch.argmax(order)
+                order[best_mode] = -1
+                target_classes = get_target_classes(param_sub_all[:, best_mode], candidates, images, labels)
+                if -1 in candidates[target_classes]:
+                    rest = ~(candidates == -1)
+                    target_classes = candidates[rest]
+                candidates[target_classes] = -1
+
             #     trainloader_sub = mnist_per_class.sub_trainloaders[idx_sub]
             #     images_sub, labels_sub = next(iter(trainloader_sub))
-            #     loss_sub = loss_sub + compute_l_sub(param_sub_all[:, idx_sub], images_sub, labels_sub)
-            eig_target = torch.cat([torch.ones(num_mode_dom, device=device),
-                                    torch.zeros(hidden_k - num_mode_dom, device=device)])
+                loss_sub = loss_sub + compute_l_sub(param_sub_all[:, best_mode], target_classes, images, labels)
+
+            # eig_target = torch.cat([torch.ones(num_mode_dom, device=device),
+            #                         torch.zeros(hidden_k - num_mode_dom, device=device)])
             # loss_eig = torch.linalg.norm(eigvals.real - eig_target) + torch.linalg.norm(eigvals.imag)
             # OR
-            loss_eig = torch.linalg.norm(eigvals - eig_target)
+            # loss_eig = torch.linalg.norm(eigvals - eig_target)
 
-            loss = loss_eig  # loss_classifier + loss_kae +
-            writer.add_scalar('Loss/classification', loss_classifier.item(), epoch * inner)
-            # writer.add_scalar('Loss/eig', loss_eig.item(), epoch * inner)
-            writer.add_scalar('Loss/kae', loss_kae.item(), epoch * inner)
-            # writer.add_scalar('Loss/sub', loss_sub.item(), epoch * inner)
-            writer.add_scalar('Loss/all', loss.item(), epoch * inner)
+            loss = loss_kae + loss_sub  # loss_classifier + loss_kae +
+            writer.add_scalar('Loss/classification', loss_classifier.item(), n_batch * epoch + inner)
+            # writer.add_scalar('Loss/eig', loss_eig.item(), step = n_batch * epoch + inner)
+            writer.add_scalar('Loss/kae', loss_kae.item(), n_batch * epoch + inner)
+            writer.add_scalar('Loss/sub', loss_sub.item(), n_batch * epoch + inner)
+            writer.add_scalar('Loss/all', loss.item(), n_batch * epoch + inner)
 
             optimizer_kae.zero_grad()
             optimizer_classifier.zero_grad()
