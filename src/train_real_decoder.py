@@ -72,7 +72,7 @@ def compute_theta_sub_all(kae, z):
     for e in range(hidden_k):
         writer.add_scalar(f'Eigval/{e}', torch.abs(eigvals[e]), n_batch * epoch + inner)
     # B = np.pad(np.eye(n_params), ((0, 0), (0, N_O - n_params)), mode='constant')
-    eigvec_left_inv = torch.linalg.inv(eigvec_left)
+    eigvec_left_inv = torch.linalg.pinv(eigvec_left)
     v = (kae.decoder(eigvec_left_inv)).T
     phi = eigvec_left @ z[-1, :]
     param_sub_all = v @ torch.diag(phi)
@@ -121,10 +121,6 @@ def get_target_classes(param_sub, candidates, images, labels):
                 acc.append(-1)
         _, top_idx = torch.topk(torch.tensor(acc), num_class_per_mode)
         return candidates[top_idx]
-        
-
-
-    
 
 if __name__=='__main__':
     # Hyperparameters
@@ -142,17 +138,17 @@ if __name__=='__main__':
     hidden_c = 16
     hidden_k = 4
     num_classes = 10
-    num_mode_dom = 4
+    num_mode_dom = 1
     num_class_per_mode = int(math.ceil(num_classes/num_mode_dom))
     batch_size = 128
-    lr_classifier = 1e-3
-    lr_kae = 1e-2
-    num_epochs = 10
-    T = 2
+    lr_classifier = 1e-5 # 1e-3
+    lr_kae = 1e-2 # 1e-2
+    num_epochs = 100
+    T = 5 # 2 
     c1 = 1
     c2 = 1
     c3 = 1
-    p = 20
+    p = 10 # 20
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load datasets
@@ -249,10 +245,13 @@ if __name__=='__main__':
             writer.add_scalar('Loss/all', loss.item(), n_batch * epoch + inner)
 
             optimizer_kae.zero_grad()
-            optimizer_classifier.zero_grad()
             loss.backward()
             optimizer_kae.step()
+            ######################################################################################################################################################
+            optimizer_classifier.zero_grad()
+            loss_classifier.backward() 
             optimizer_classifier.step()
+            ######################################################################################################################################################
             params_snapshots.append(parameters_to_vector(classifier.parameters()))
             params_snapshots.pop(0) # Maybe don't pop?
             running_loss += loss.item()
@@ -268,26 +267,5 @@ if __name__=='__main__':
             'ko': kae.K
         }, 'results/result.pth')
 
-    # _, z = compute_l_kae(kae, params_snapshots)
-    # with torch.autograd.no_grad():
-    #     for idx_sub in range(num_classes):
-    #         # param_sub = compute_theta_sub(kae, z, idx_sub)
-    #         param_sub = param_sub_all[:, idx_sub]
-    #         classifier_sub = MLP(image_size, hidden_c, num_classes).to(device)
-    #         classifier_sub.eval()
-    #         nn.utils.vector_to_parameters(param_sub, classifier_sub.parameters())
-    #         testloader = mnist_per_class.sub_testloaders[idx_sub]
-    #         total = 0
-    #         correct = 0
-    #         for images, labels in testloader:
-    #             images = images.reshape(-1, 28*28).to(device)
-    #             labels = labels.to(device)
-    #             outputs = classifier_sub(images)
-    #             _, predicted = torch.max(outputs, 1)
-    #             total += labels.size(0)
-    #             correct += (predicted == labels).sum().item()
-    #         accuracy = 100 * correct / total
-    #         print(f'Test Accuracy of class {idx_sub:d}: {accuracy:.2f}%')
-    # # with open('.data/snapshots/params_snapshots.pkl', 'wb') as f:
-    # #     pickle.dump(params_snapshots, f)
     writer.flush()
+        
