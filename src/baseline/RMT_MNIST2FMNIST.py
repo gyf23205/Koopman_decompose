@@ -33,7 +33,7 @@ def test_downstream(model):
         model.eval()
         model_acc = np.zeros((num_classes,))
         for idx in range(num_classes):
-            testloader = mnist_per_class.sub_testloaders[idx]
+            testloader = fmnist_per_class.sub_testloaders[idx]
             total = 0
             correct = 0
             for images, labels in testloader:
@@ -77,12 +77,12 @@ if __name__=='__main__':
 
     # Set up training
     l = 1
-    epoch = 10
+    epoch = 1
     batch_size = 4
     idx_class_train = 3 # Target class
     # mnist = MNIST(batch_size=batch_size).train_loader
-    mnist_per_class = MNISTPerClass(batch_size=batch_size)
-    trainloader = mnist_per_class.sub_trainloaders[idx_class_train]
+    fmnist_per_class = FMNISTPerClass(batch_size=batch_size)
+    trainloader = fmnist_per_class.sub_trainloaders[idx_class_train]
     optim = torch.optim.Adam(params_trainable, lr=gamma)
     cross_entropy = nn.CrossEntropyLoss()
     kl_div = nn.KLDivLoss()
