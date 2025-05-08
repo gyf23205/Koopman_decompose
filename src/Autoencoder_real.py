@@ -43,10 +43,10 @@ class KoopmanAutoencoder(nn.Module):
 
         z = self.encoder(x)  
         
-        if self.K is not None:
-            z_next = torch.matmul(z, self.K.T)  # Apply computed Koopman operator
-        else:
-            z_next = z  
+        # if self.K is not None:
+        z_next = torch.matmul(z, self.K.T)  # Apply computed Koopman operator
+        # else:
+            # z_next = z  
 
         x_hat = self.decoder(z)  
         return x_hat, z, z_next
