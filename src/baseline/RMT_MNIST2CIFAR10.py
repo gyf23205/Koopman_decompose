@@ -51,7 +51,8 @@ def test_downstream(model):
 
 if __name__=='__main__':
     # Get the pretrained classifier
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = 'cpu'
     results = torch.load('results/result.pth', map_location=torch.device(device))
     state_dict = results['param_original']
     image_size = 784  # 28x28 images flattened
@@ -79,9 +80,9 @@ if __name__=='__main__':
 
     # Set up training
     l = 1
-    epoch = 10
+    epoch = 2
     batch_size = 4
-    idx_class_train = 3 # Target class
+    idx_class_train = 5 # Target class
     # mnist = MNIST(batch_size=batch_size).train_loader
     cifar10_per_class = CIFARPerClass(batch_size=batch_size)
     trainloader = cifar10_per_class.sub_trainloaders[idx_class_train]

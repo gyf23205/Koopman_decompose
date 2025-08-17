@@ -30,6 +30,7 @@ def manual_load_state_dict(model_masked, state_dict):
 
 def test_downstream(model):
     with torch.autograd.no_grad():
+        count = np.zeros((num_classes,))
         model.eval()
         model_acc = np.zeros((num_classes,))
         for idx in range(num_classes):
@@ -41,15 +42,22 @@ def test_downstream(model):
                 labels = labels.to(device)
                 outputs = model(images)
                 _, predicted = torch.max(outputs, 1)
+                for k in predicted.cpu().numpy():
+                    count[k] += 1
+                # print(predicted)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
             accuracy = 100 * correct / total
             model_acc[idx] = accuracy
         print(f'Model accuracy: {model_acc}')
+        # print(count)
 
 if __name__=='__main__':
     # Get the pretrained classifier
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    np.set_printoptions(linewidth=np.inf)
+    np.set_printoptions(suppress=True)
+    device = 'cpu'
     results = torch.load('results/result.pth', map_location=torch.device(device))
     state_dict = results['param_original']
     image_size = 784  # 28x28 images flattened
@@ -77,9 +85,9 @@ if __name__=='__main__':
 
     # Set up training
     l = 1
-    epoch = 1
-    batch_size = 4
-    idx_class_train = 3 # Target class
+    epoch = 100
+    batch_size = 64
+    idx_class_train = 9 # Target class
     # mnist = MNIST(batch_size=batch_size).train_loader
     fmnist_per_class = FMNISTPerClass(batch_size=batch_size)
     trainloader = fmnist_per_class.sub_trainloaders[idx_class_train]
@@ -87,7 +95,7 @@ if __name__=='__main__':
     cross_entropy = nn.CrossEntropyLoss()
     kl_div = nn.KLDivLoss()
     for i in range(epoch):
-        print(i)
+        # print(i)
         images, labels = next(iter(trainloader))
         images, labels = images.view(-1, image_size).to(device), labels.to(device)
         mlp_masked.update_binary_mask()
@@ -107,6 +115,6 @@ if __name__=='__main__':
         optim.zero_grad()
     
     test_downstream(mlp_masked)
-    test_downstream(classifier_original)
+    # test_downstream(classifier_original)
 
 
